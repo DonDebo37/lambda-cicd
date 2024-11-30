@@ -24,24 +24,30 @@ jobs:
 
       - name: Validate Cloudformation template
         run: |
+          if [ ! -f cloudformation/s3-bucket.yml ]; then
+            echo "CloudFormation template not found!"
+            exit 1
+          fi
           aws cloudformation validate-template --template-body file://cloudformation/s3-bucket.yml
 
       - name: Deploy our stack
         run: |
           stack_name="pr-test-stack-${{github.event.pull_request.number}}"
-          aws cloudformation create-stack --stack-name $stack_name --template-body file://cloudformation/s3-bucket.yml --parameters ParameterKey=Environment,ParameterValue=test
+          aws cloudformation create-stack --stack-name "$stack_name" --template-body file://cloudformation/s3-bucket.yml --parameters ParameterKey=Environment,ParameterValue=test
+          aws cloudformation wait stack-create-complete --stack-name "$stack_name"
 
-      - name: comment on PR
+      - name: Comment on PR
         uses: actions/github-script@v6
         with:
           github-token: ${{secrets.GITHUB_TOKEN}}
-          scripts: |
+          script: |
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
               body: 'Cloudformation test stack deployed. Stack name: pr-test-stack-${{ github.event.pull_request.number}}'
             })
+
   cleanup-on-merge:
     runs-on: ubuntu-latest
     if: github.event.pull_request.merged == true
@@ -56,4 +62,5 @@ jobs:
       - name: Delete our stack
         run: |
           stack_name="pr-test-stack-${{github.event.pull_request.number}}"
-          aws cloudformation delete-stack --stack-name $stack_name
+          aws cloudformation delete-stack --stack-name "$stack_name"
+          aws cloudformation wait stack-delete-complete --stack-name "$stack_name"

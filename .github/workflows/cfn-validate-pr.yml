@@ -12,42 +12,78 @@ permissions:
 jobs:
   validate-cfn:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v1
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: eu-west-2
 
       - name: Validate Cloudformation template
+        id: validate
         run: |
-          aws cloudformation validate-template --template-body file://cloudformation/s3-bucket.yml
+          echo "Validating CloudFormation template..."
+          validation_output=$(aws cloudformation validate-template \
+            --template-body file://cloudformation/s3-bucket.yml \
+            --no-cli-pager)
+          echo "Template validation successful!"
+          echo "validation_result=${validation_output}" >> $GITHUB_OUTPUT
 
       - name: Deploy our stack
+        id: deploy
         run: |
           stack_name="pr-test-stack-${{github.event.pull_request.number}}"
-          aws cloudformation create-stack --stack-name $stack_name --template-body file://cloudformation/s3-bucket.yml --parameters ParameterKey=Environment,ParameterValue=test
+          echo "Creating stack: $stack_name"
+          
+          aws cloudformation create-stack \
+            --stack-name "$stack_name" \
+            --template-body file://cloudformation/s3-bucket.yml \
+            --parameters ParameterKey=Environment,ParameterValue=test \
+            --no-cli-pager
+          
+          echo "Waiting for stack creation to complete..."
+          aws cloudformation wait stack-create-complete \
+            --stack-name "$stack_name"
+          
+          echo "Getting stack outputs..."
+          outputs=$(aws cloudformation describe-stacks \
+            --stack-name "$stack_name" \
+            --query 'Stacks[0].Outputs' \
+            --output json)
+          echo "stack_outputs=${outputs}" >> $GITHUB_OUTPUT
 
       - name: Comment PR
         uses: actions/github-script@v6
         with:
-          github-token: ${{secrets.GITHUB_TOKEN}}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            github.rest.issues.createComment({
+            const outputs = JSON.parse('${{ steps.deploy.outputs.stack_outputs }}' || '[]');
+            const outputText = outputs.map(o => `${o.OutputKey}: ${o.OutputValue}`).join('\n');
+            
+            await github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: 'Cloudformation test stack deployed. Stack name: pr-test-stack-${{ github.event.pull_request.number}}'
+              body: `✅ CloudFormation Deployment Summary\n\n` +
+                    `**Template Validation:** Successful\n` +
+                    `**Stack Details:**\n` +
+                    `- Name: pr-test-stack-${context.issue.number}\n` +
+                    `- Environment: test\n` +
+                    `- Region: eu-west-2\n\n` +
+                    `**Stack Outputs:**\n\`\`\`\n${outputText}\n\`\`\``
             })
+
   cleanup-on-merge:
     runs-on: ubuntu-latest
     if: github.event.pull_request.merged == true
+    timeout-minutes: 10
     steps:
       - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v1
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -56,4 +92,12 @@ jobs:
       - name: Delete Test Stack
         run: |
           stack_name="pr-test-stack-${{github.event.pull_request.number}}"
-          aws cloudformation delete-stack --stack-name $stack_name
+          echo "Deleting stack: $stack_name"
+          
+          aws cloudformation delete-stack --stack-name "$stack_name"
+          
+          echo "Waiting for stack deletion to complete..."
+          aws cloudformation wait stack-delete-complete \
+            --stack-name "$stack_name"
+          
+          echo "Stack deletion completed successfully"

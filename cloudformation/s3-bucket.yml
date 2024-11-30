@@ -19,7 +19,10 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
-  Outputs:
-    BucketName:
-      Description: 'Name of created S3 Bucket'
-      Value: !Ref MyS3Bucket
+Outputs:
+  BucketName:
+    Description: 'Name of created S3 Bucket'
+    Value: !Ref MyS3Bucket
+  BucketARN:
+    Description: 'ARN of created S3 Bucket'
+    Value: !GetAtt MyS3Bucket.Arn
